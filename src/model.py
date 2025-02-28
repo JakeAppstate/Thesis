@@ -7,6 +7,34 @@ from transformers import AutoConfig, TFAutoModel
 # 1. Add more ViT types including SWIN
 # 2. Create model checkpoints for training
 
+class VisionTransformer():
+  def __init__(self, name, hf_id, cnn_data):
+    self.name = name
+    img_size, num_channels, num_classes = cnn_data
+    config = AutoConfig.from_pretrained(hf_id, image_size = img_size, patch_size = 1, num_channels = num_channels, num_labels=num_classes)
+    model = TFAutoModel.from_config(config)
+    model.compile(
+      optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-5),
+      loss = tf.keras.loss.BinaryCrossentropy(),
+      metrics = ["binary_accuracy", "AUC"],
+    )
+    self.model = model
+
+  def train(self, ds, epochs, save_dir="models"):
+    model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+      filepath=f"{save_dir}/{self.name}.keras",
+      monitor='AUC',
+      mode='max',
+      save_best_only=True,
+      save_weights_only=False
+    )
+    ds = ds.map(lambda img, label: (self.base_model(img), label)) #TODO add threads
+    self.model.fit(ds, epochs=epochs, callbacks=[model_checkpoint_callback])
+
+  @staticmethod
+  def get_keras_from_name(name, save_dir):
+    return tf.keras.models.load_model(f"{save_dir}/{name}.keras")
+
 class CNN_ViT_Builder():
   """Creates the necessary components and instantiates the CNN_ViT_Ensemble class
 
@@ -22,30 +50,32 @@ class CNN_ViT_Builder():
     num_vits: Number of ViTs used.
   """
 
-    def __init__(self, input_shape, num_classes, cnn_type, vit_types):
-        """Initializes the object and creates keras models
+  def __init__(self, input_shape, num_classes, cnn_type):
+    """Initializes the object and creates keras models
 
-        Args:
-            input_shape: Tuple defining the input shape of the model
-            num_classes: Int defining the number of classes
-            cnn_type: String specifying the CNN to be used e.g. InceptionV3
-            vit_types: List of strings specifying the ViTs to be used e.g. SWIN
-                duplicate entries result in 2 identical models being trained
-        """
+    Args:
+        input_shape: Tuple defining the input shape of the model
+        num_classes: Int defining the number of classes
+        cnn_type: String specifying the CNN to be used e.g. InceptionV3
+        vit_types: List of strings specifying the ViTs to be used e.g. SWIN
+            duplicate entries result in 2 identical models being trained
+    """
     self.num_classes = num_classes
     cnn_model = self._get_cnn_model(cnn_type, input_shape)
     _, w, h, c = cnn_model.output_shape
     permute = tf.keras.layers.Permute((3, 1, 2)) # move channels to the front
     self.base_model = tf.keras.Sequential([cnn_model, permute])
 
-    models = []
-    for vit_type in vit_types:
-      model = self._get_vit_model(vit_type, w, c, num_classes)
-      model.compile()
-      models.append(model)
+    self.cnn_img_size = w
+    self.cnn_channels = c
 
-    self.vit_models = models
-    self.num_vits = len(models)
+    self.vits = []
+
+  def get_cnn_data(self):
+    return (self.cnn_img_size, self.cnn_channels, self.num_classes)
+  
+  def add_vit(self, name):
+    self.vits.append(VisionTransformer.get_keras_from_name(name))
 
   def train(self, ds, num_epochs, save_dir):
     """Trains the ViTs before ensembling
@@ -55,7 +85,7 @@ class CNN_ViT_Builder():
         num_epochs: Int specifying the number of epochs trained
     """
     # image, label = ds
-    ds = ds.map(lambda img, label: (self.base_model(img), label))
+    ds = ds.map(lambda img, label: (self.base_model(img), label)) #TODO add threads
     for model in self.vit_models:
         # TODO add checkpoints
         path = f"{save_dir}/"
@@ -83,15 +113,15 @@ class CNN_ViT_Builder():
     raise ValueError(f"model_name: {model_name} is not a valid input")
 
   def _get_vit_model(self, model_name, img_size, num_channels, num_classes):
-      """Private method that loads the keras model for the given ViT
+    """Private method that loads the keras model for the given ViT
 
-      Args:
-        model_name: Name of the ViT e.g. DeiT
-        img_size: size of input image to the ViT
-        num:channels: number of channels of the input image
-        num_classes: number of classes of the data
-      """
-      if(model_name == "ViT"):
+    Args:
+      model_name: Name of the ViT e.g. DeiT
+      img_size: size of input image to the ViT
+      num:channels: number of channels of the input image
+      num_classes: number of classes of the data
+    """
+    if(model_name == "ViT"):
       # config = ViTConfig(image_size = img_size, patch_size = 1, num_channels = num_channels, num_labels=num_classes)
       name = "google/vit-base-patch16-224"
       # return TFViTForImageClassification.from_pretrained(name, config = config, ignore_mismatched_sizes=True)
@@ -100,6 +130,8 @@ class CNN_ViT_Builder():
       name = "facebook/deit-base-distilled-patch16-224"
       # return TFDeiTForImageClassification.from_pretrained(name, config = config, ignore_mismatched_sizes=True)
     # add SWIN
+    elif model_name == "SWIN":
+        name = "microsoft/swin-tiny-patch4-window7-224"
     else:
       raise ValueError(f"Vision Transformer {model_name} is not a valid entry")
     config = AutoConfig.from_pretrained(name, image_size = img_size, patch_size = 1, num_channels = num_channels, num_labels=num_classes)
