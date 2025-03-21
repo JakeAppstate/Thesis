@@ -1,8 +1,8 @@
 import csv
-import tensorflow as tf
-from tensorflow.data import Dataset
+import tensorflow as tf # type: ignore
+from tensorflow.data import Dataset # type: ignore
 # import tf_clahe
-import cv2
+import cv2 # type: ignore
 
 @tf.function
 def load_jpg(filename, img_size):
@@ -71,7 +71,6 @@ def get_datasets(data_dir, csv_file, img_size, target_shape,
                                              lambda: (state[0], state[1] + 1), 
                                              lambda: (state[0] + 1, state[1]))
     counts = train_ds.reduce((0, 0), reduce_fun)
-    print("Counts:", counts)
     
     # load and preprocess images
     f = lambda x, y: (preprocess(load_jpg(x, img_size), img_size, target_shape, yolo_path), y)
